@@ -51,10 +51,15 @@ typedef int          INT4;
 #define AUTH_LOCAL_SND  (1<<2)
 #define AUTH_RADIUS_SND (1<<3)
 
+#define PROTO_UDP 0
+#define PROTO_TCP 1
+#define PROTO_DEFAULT PROTO_UDP
+
 typedef struct server {
 	int max;
 	char *name[SERVER_MAX];
 	unsigned short port[SERVER_MAX];
+	unsigned char proto;
 } SERVER;
 
 typedef struct pw_auth_hdr
@@ -347,6 +352,7 @@ typedef struct send_data /* Used to pass information to sendserver() function */
 	u_char          seq_nbr;	/* Packet sequence number */
 	char           *server;		/* Name/addrress of RADIUS server */
 	int             svc_port;	/* RADIUS protocol destination port */
+	unsigned char   proto;		/* Protocol to use for communicating with RADIUS server */
 	int             timeout;	/* Session timeout in seconds */
 	int		retries;
 	VALUE_PAIR     *send_pairs;     /* More a/v pairs to send */

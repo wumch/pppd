@@ -17,6 +17,7 @@
 #include <includes.h>
 #include <radiusclient.h>
 #include <pathnames.h>
+#include <fcntl.h>
 
 static void rc_random_vector (unsigned char *);
 static int rc_check_reply (AUTH_HDR *, int, char *, unsigned char *, unsigned char);
@@ -196,7 +197,7 @@ int rc_send_server (SEND_DATA *data, char *msg, REQUEST_INFO *info)
 	struct sockaddr saremote;
 	struct sockaddr_in *sin;
 	struct timeval  authtime;
-	fd_set          readfds;
+	fd_set          readfds, writefds;
 	AUTH_HDR       *auth, *recv_auth;
 	UINT4           auth_ipaddr;
 	char           *server_name;	/* Name of server to query */
@@ -212,6 +213,7 @@ int rc_send_server (SEND_DATA *data, char *msg, REQUEST_INFO *info)
 	char            send_buffer[BUFFER_LEN];
 	int		retries;
 	VALUE_PAIR	*vp;
+	const int use_udp = data->proto == PROTO_UDP;
 
 	server_name = data->server;
 	if (server_name == (char *) NULL || server_name[0] == '\0')
@@ -232,7 +234,7 @@ int rc_send_server (SEND_DATA *data, char *msg, REQUEST_INFO *info)
 		}
 	}
 
-	sockfd = socket (AF_INET, SOCK_DGRAM, 0);
+	sockfd = socket (AF_INET, use_udp ? SOCK_DGRAM : SOCK_STREAM, 0);
 	if (sockfd < 0)
 	{
 		memset (secret, '\0', sizeof (secret));
@@ -240,19 +242,38 @@ int rc_send_server (SEND_DATA *data, char *msg, REQUEST_INFO *info)
 		return (ERROR_RC);
 	}
 
-	length = sizeof (salocal);
-	sin = (struct sockaddr_in *) & salocal;
-	memset ((char *) sin, '\0', (size_t) length);
-	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = htonl(INADDR_ANY);
-	sin->sin_port = htons ((unsigned short) 0);
-	if (bind (sockfd, (struct sockaddr *) sin, length) < 0 ||
-		   getsockname (sockfd, (struct sockaddr *) sin, &length) < 0)
+    authtime.tv_usec = 0L;
+    authtime.tv_sec = (long) data->timeout;
+
+	if (use_udp)
 	{
-		close (sockfd);
-		memset (secret, '\0', sizeof (secret));
-		error("rc_send_server: bind: %s: %m", server_name);
-		return (ERROR_RC);
+        length = sizeof (salocal);
+        sin = (struct sockaddr_in *) & salocal;
+        memset ((char *) sin, '\0', (size_t) length);
+        sin->sin_family = AF_INET;
+        sin->sin_addr.s_addr = htonl(INADDR_ANY);
+        sin->sin_port = htons ((unsigned short) 0);
+        if (bind (sockfd, (struct sockaddr *) sin, length) < 0 ||
+               getsockname (sockfd, (struct sockaddr *) sin, &length) < 0)
+        {
+            close (sockfd);
+            memset (secret, '\0', sizeof (secret));
+            error("rc_send_server: bind: %s: %m", server_name);
+            return (ERROR_RC);
+        }
+	}
+	else
+	{
+	    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &authtime, sizeof(authtime)) < 0 ||
+                setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &authtime, sizeof(authtime)) < 0 ||
+                fcntl(sockfd, F_SETFL, O_NONBLOCK) < 0 ||
+                connect(sockfd, &saremote, sizeof(saremote)) < 0)
+	    {
+            close (sockfd);
+            memset (secret, '\0', sizeof (secret));
+            error("rc_send_server: connect: %s: %m", server_name);
+            return (ERROR_RC);
+	    }
 	}
 
 	retry_max = data->retries;	/* Max. numbers to try for reply */
@@ -291,16 +312,25 @@ int rc_send_server (SEND_DATA *data, char *msg, REQUEST_INFO *info)
 	sin->sin_addr.s_addr = htonl (auth_ipaddr);
 	sin->sin_port = htons ((unsigned short) data->svc_port);
 
+	int events, tcp_state = 0;
 	for (;;)
 	{
-		sendto (sockfd, (char *) auth, (unsigned int) total_length, (int) 0,
-			(struct sockaddr *) sin, sizeof (struct sockaddr_in));
+        FD_ZERO (&readfds);
+        FD_SET (sockfd, &readfds);
+	    if (use_udp)
+	    {
+            sendto (sockfd, (char *) auth, (unsigned int) total_length, (int) 0,
+                (struct sockaddr *) sin, sizeof (struct sockaddr_in));
+            events = select (sockfd + 1, &readfds, NULL, NULL, &authtime);
+	    }
+	    else
+	    {
+	        FD_ZERO(&writefds);
+	        FD_SET(sockfd, &writefds);
+	        events = select (sockfd + 1, &readfds, &writefds, NULL, &authtime);
+	    }
 
-		authtime.tv_usec = 0L;
-		authtime.tv_sec = (long) data->timeout;
-		FD_ZERO (&readfds);
-		FD_SET (sockfd, &readfds);
-		if (select (sockfd + 1, &readfds, NULL, NULL, &authtime) < 0)
+		if (events < 0)
 		{
 			if (errno == EINTR)
 				continue;
@@ -309,8 +339,29 @@ int rc_send_server (SEND_DATA *data, char *msg, REQUEST_INFO *info)
 			close (sockfd);
 			return (ERROR_RC);
 		}
-		if (FD_ISSET (sockfd, &readfds))
-			break;
+		if (use_udp)
+		{
+		    if (FD_ISSET (sockfd, &readfds))
+		    {
+		        break;
+		    }
+		}
+		else
+		{
+            printf("%s:%d tcp_state: [%d]\n", __FILE__, __LINE__, tcp_state);
+		    switch (tcp_state++)
+		    {
+		    case 0:
+	            printf("%s:%d tcp_state: [%d]\n", __FILE__, __LINE__, tcp_state);
+		        FD_ISSET(sockfd, &writefds);
+	            send(sockfd, auth, total_length);
+		        continue;
+		    case 1:
+	            printf("%s:%d tcp_state: [%d]\n", __FILE__, __LINE__, tcp_state);
+		        length = recv(sockfd, recv_buffer, sizeof(recv_buffer), 0);  // TODO: assume receved all...
+		        break;
+		    }
+		}
 
 		/*
 		 * Timed out waiting for response.  Retry "retry_max" times

@@ -61,10 +61,11 @@ int rc_get_nas_id(VALUE_PAIR **sendpairs)
  */
 
 void rc_buildreq(SEND_DATA *data, int code, char *server, unsigned short port,
-		 int timeout, int retries)
+		 unsigned char proto, int timeout, int retries)
 {
 	data->server = server;
 	data->svc_port = port;
+	data->proto = proto;
 	data->seq_nbr = rc_get_seqnbr();
 	data->timeout = timeout;
 	data->retries = retries;
@@ -221,7 +222,7 @@ int rc_auth_using_server(SERVER *authserver,
 			data.receive_pairs = NULL;
 		}
 		rc_buildreq(&data, PW_ACCESS_REQUEST, authserver->name[i],
-			    authserver->port[i], timeout, retries);
+			    authserver->port[i], authserver->proto[i], timeout, retries);
 
 		result = rc_send_server (&data, msg, info);
 	}
@@ -265,7 +266,7 @@ int rc_auth_proxy(VALUE_PAIR *send, VALUE_PAIR **received, char *msg)
 			data.receive_pairs = NULL;
 		}
 		rc_buildreq(&data, PW_ACCESS_REQUEST, authserver->name[i],
-			    authserver->port[i], timeout, retries);
+			    authserver->port[i], authserver->proto[i], timeout, retries);
 
 		result = rc_send_server (&data, msg, NULL);
 	}
@@ -334,7 +335,7 @@ int rc_acct_using_server(SERVER *acctserver,
 			data.receive_pairs = NULL;
 		}
 		rc_buildreq(&data, PW_ACCOUNTING_REQUEST, acctserver->name[i],
-			    acctserver->port[i], timeout, retries);
+			    acctserver->port[i], acctserver->proto[i], timeout, retries);
 
 		dtime = time(NULL) - start_time;
 		rc_avpair_assign(adt_vp, &dtime, 0);
@@ -394,7 +395,7 @@ int rc_acct_proxy(VALUE_PAIR *send)
 			data.receive_pairs = NULL;
 		}
 		rc_buildreq(&data, PW_ACCOUNTING_REQUEST, acctserver->name[i],
-			    acctserver->port[i], timeout, retries);
+			    acctserver->port[i], acctserver->proto[i], timeout, retries);
 
 		result = rc_send_server (&data, msg, NULL);
 	}
@@ -412,7 +413,7 @@ int rc_acct_proxy(VALUE_PAIR *send)
  *
  */
 
-int rc_check(char *host, unsigned short port, char *msg)
+int rc_check(char *host, unsigned short port, unsigned char proto, char *msg)
 {
 	SEND_DATA       data;
 	int		result;
@@ -437,7 +438,7 @@ int rc_check(char *host, unsigned short port, char *msg)
 	service_type = PW_ADMINISTRATIVE;
 	rc_avpair_add(&(data.send_pairs), PW_SERVICE_TYPE, &service_type, 0, VENDOR_NONE);
 
-	rc_buildreq(&data, PW_STATUS_SERVER, host, port, timeout, retries);
+	rc_buildreq(&data, PW_STATUS_SERVER, host, port, proto, timeout, retries);
 	result = rc_send_server (&data, msg, NULL);
 
 	rc_avpair_free(data.receive_pairs);

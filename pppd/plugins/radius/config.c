@@ -185,6 +185,8 @@ static int set_option_auo(char *filename, int line, OPTION *option, char *p)
 
 int rc_read_config(char *filename)
 {
+
+    printf("%s:%d filename: [%s]\n", __FILE__, __LINE__, filename);
 	FILE *configfd;
 	char buffer[512], *p;
 	OPTION *option;
